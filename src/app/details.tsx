@@ -1,304 +1,186 @@
-import { Image } from "expo-image";
 import { Stack, useLocalSearchParams } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
-import {
-  ActivityIndicator,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import { ActivityIndicator, ScrollView, Text, View } from "react-native";
 
+import { CenteredMessage } from "@/components/centered-message";
+import { ErrorState } from "@/components/error-state";
+import { Image } from "@/components/uni-image";
 import { getTypeTheme } from "@/constants/pokemon-types";
+import { usePokemonDetails } from "@/hooks/use-pokemon";
+import { formatName } from "@/lib/format-name";
+import { cn } from "cn";
 
-type PokemonType = { type: { name: string } };
+type PokemonDetails = NonNullable<ReturnType<typeof usePokemonDetails>["data"]>;
 
-type PokemonStat = {
-  base_stat: number;
-  stat: { name: string };
+const MAX_BASE_STAT = 255;
+
+const formatId = (id: number) => `#${String(id).padStart(3, "0")}`;
+
+const getArtwork = (details: PokemonDetails) =>
+  details.sprites.other?.["official-artwork"]?.front_default ??
+  details.sprites.front_default ??
+  null;
+
+const useNameParam = () => {
+  const { name } = useLocalSearchParams<{ name?: string | string[] }>();
+  return Array.isArray(name) ? name[0] : name;
 };
 
-type PokemonAbility = {
-  ability: { name: string };
-  is_hidden: boolean;
+const Header = ({ details }: { details: PokemonDetails }) => {
+  const theme = getTypeTheme(details.types[0]?.type.name ?? "unknown");
+
+  return (
+    <View
+      className={cn("items-center gap-1 rounded-3xl px-4 py-4", theme.background)}
+    >
+      <Image
+        source={getArtwork(details)}
+        className="size-50"
+        contentFit="contain"
+        transition={200}
+        alt={details.name}
+      />
+      <Text className={cn("text-[28px] font-bold", theme.foreground)} selectable>
+        {formatName(details.name)}
+      </Text>
+      <Text className={cn("text-base font-semibold", theme.foreground)}>
+        {formatId(details.id)}
+      </Text>
+
+      <View className="mt-2 flex-row flex-wrap justify-center gap-2">
+        {details.types.map(({ type }) => (
+          <View
+            key={type.name}
+            className={cn("rounded-full px-3.5 py-1.5", theme.chip)}
+          >
+            <Text className="text-[15px] font-semibold text-white">
+              {formatName(type.name)}
+            </Text>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
 };
 
-type PokemonSprites = {
-  front_default: string | null;
-  back_default: string | null;
-  other?: {
-    "official-artwork"?: { front_default: string | null };
-  };
-};
+const InfoTile = ({ label, value }: { label: string; value: string }) => (
+  <View className="flex-1 items-center gap-1 rounded-2xl bg-gray-100 py-3">
+    <Text className="text-[13px] font-semibold uppercase text-gray-500">
+      {label}
+    </Text>
+    <Text className="text-lg font-bold" selectable>
+      {value}
+    </Text>
+  </View>
+);
 
-type PokemonDetails = {
-  id: number;
-  name: string;
-  height: number;
-  weight: number;
-  types: PokemonType[];
-  stats: PokemonStat[];
-  abilities: PokemonAbility[];
-  sprites: PokemonSprites;
-};
+const Section = ({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) => (
+  <View className="gap-2">
+    <Text className="text-xl font-bold">{title}</Text>
+    {children}
+  </View>
+);
 
-const formatName = (value: string) =>
-  value
-    .replace(/-/g, " ")
-    .replace(/\b\w/g, (character) => character.toUpperCase());
+const StatRow = ({ label, value }: { label: string; value: number }) => (
+  <View className="gap-1">
+    <View className="flex-row justify-between">
+      <Text className="text-base text-gray-500">{label}</Text>
+      <Text className="text-base font-semibold tabular-nums">{value}</Text>
+    </View>
+    <View className="h-1.5 overflow-hidden rounded-full bg-gray-200">
+      <View
+        className="h-1.5 rounded-full bg-[#208AEF]"
+        style={{ width: `${Math.min(value / MAX_BASE_STAT, 1) * 100}%` }}
+      />
+    </View>
+  </View>
+);
+
+const DetailsContent = ({ details }: { details: PokemonDetails }) => (
+  <ScrollView
+    className="bg-white"
+    contentContainerClassName="gap-5 p-4"
+    contentInsetAdjustmentBehavior="automatic"
+  >
+    <Header details={details} />
+
+    <View className="flex-row gap-3">
+      <InfoTile label="Height" value={`${(details.height / 10).toFixed(1)} m`} />
+      <InfoTile label="Weight" value={`${(details.weight / 10).toFixed(1)} kg`} />
+    </View>
+
+    <Section title="Abilities">
+      {details.abilities.map(({ ability, is_hidden }) => (
+        <Text key={ability.name} className="text-base">
+          {formatName(ability.name)}
+          {is_hidden ? " (hidden)" : ""}
+        </Text>
+      ))}
+    </Section>
+
+    <Section title="Base stats">
+      {details.stats.map(({ stat, base_stat }) => (
+        <StatRow
+          key={stat.name}
+          label={formatName(stat.name)}
+          value={base_stat}
+        />
+      ))}
+    </Section>
+  </ScrollView>
+);
 
 const Details = () => {
-  const params = useLocalSearchParams();
-  const rawName = params.name;
-  const name = Array.isArray(rawName) ? rawName[0] : rawName;
+  const name = useNameParam();
+  const { data: details, isPending, error, refetch } = usePokemonDetails(name);
 
-  const [details, setDetails] = useState<PokemonDetails | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const renderBody = () => {
+    if (!name) {
+      return (
+        <CenteredMessage>
+          <Text className="text-center text-xl font-bold">
+            No Pokémon selected
+          </Text>
+          <Text className="text-base text-gray-500">
+            Go back and pick one from the list.
+          </Text>
+        </CenteredMessage>
+      );
+    }
 
-  const load = useCallback(
-    async (signal?: AbortSignal) => {
-      if (!name) {
-        setDetails(null);
-        setIsLoading(false);
-        return;
-      }
+    if (isPending) {
+      return (
+        <CenteredMessage>
+          <ActivityIndicator />
+          <Text className="text-base text-gray-500">Loading…</Text>
+        </CenteredMessage>
+      );
+    }
 
-      setIsLoading(true);
-      setError(null);
+    if (error || !details) {
+      return (
+        <ErrorState
+          title="Couldn't load this Pokémon"
+          message={error?.message ?? "Pokémon not found."}
+          onRetry={() => void refetch()}
+        />
+      );
+    }
 
-      try {
-        const response = await fetch(
-          `https://pokeapi.co/api/v2/pokemon/${encodeURIComponent(name)}`,
-          { signal },
-        );
-
-        if (!response.ok) {
-          throw new Error(
-            response.status === 404
-              ? "Pokémon not found"
-              : `Request failed (${response.status})`,
-          );
-        }
-
-        const data = (await response.json()) as PokemonDetails;
-        if (!signal?.aborted) setDetails(data);
-      } catch (caught) {
-        if (signal?.aborted) return;
-        setDetails(null);
-        setError(
-          caught instanceof Error ? caught.message : "Something went wrong",
-        );
-      } finally {
-        if (!signal?.aborted) setIsLoading(false);
-      }
-    },
-    [name],
-  );
-
-  useEffect(() => {
-    const controller = new AbortController();
-    load(controller.signal);
-    return () => controller.abort();
-  }, [load]);
-
-  const artwork =
-    details?.sprites.other?.["official-artwork"]?.front_default ??
-    details?.sprites.front_default ??
-    null;
-
-  const theme = getTypeTheme(details?.types[0]?.type.name ?? "unknown");
+    return <DetailsContent details={details} />;
+  };
 
   return (
     <>
       <Stack.Screen options={{ title: name ? formatName(name) : "Details" }} />
-
-      {isLoading ? (
-        <View style={styles.centered}>
-          <ActivityIndicator />
-          <Text style={styles.muted}>Loading…</Text>
-        </View>
-      ) : error ? (
-        <View style={styles.centered}>
-          <Text style={styles.title}>Couldn&apos;t load this Pokémon</Text>
-          <Text style={styles.muted} selectable>
-            {error}
-          </Text>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Try loading again"
-            onPress={() => load()}
-            style={({ pressed }) => [styles.retry, pressed && { opacity: 0.7 }]}
-          >
-            <Text style={styles.retryLabel}>Try again</Text>
-          </Pressable>
-        </View>
-      ) : !details ? (
-        <View style={styles.centered}>
-          <Text style={styles.title}>No Pokémon selected</Text>
-          <Text style={styles.muted}>Go back and pick one from the list.</Text>
-        </View>
-      ) : (
-        <ScrollView
-          contentContainerStyle={styles.content}
-          contentInsetAdjustmentBehavior="automatic"
-        >
-          <View style={[styles.hero, { backgroundColor: theme.background }]}>
-            <Image
-              source={artwork}
-              style={styles.artwork}
-              contentFit="contain"
-              transition={200}
-              alt={details.name}
-            />
-            <Text style={[styles.name, { color: theme.foreground }]} selectable>
-              {formatName(details.name)}
-            </Text>
-            <Text style={[styles.id, { color: theme.foreground }]}>
-              #{String(details.id).padStart(3, "0")}
-            </Text>
-
-            <View style={styles.types}>
-              {details.types.map(({ type }) => (
-                <View
-                  key={type.name}
-                  style={[styles.typeChip, { backgroundColor: theme.foreground }]}
-                >
-                  <Text style={[styles.typeLabel, { color: "white" }]}>
-                    {formatName(type.name)}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          </View>
-
-          <View style={styles.factRow}>
-            <View style={styles.fact}>
-              <Text style={styles.factLabel}>Height</Text>
-              <Text style={styles.factValue} selectable>
-                {(details.height / 10).toFixed(1)} m
-              </Text>
-            </View>
-            <View style={styles.fact}>
-              <Text style={styles.factLabel}>Weight</Text>
-              <Text style={styles.factValue} selectable>
-                {(details.weight / 10).toFixed(1)} kg
-              </Text>
-            </View>
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Abilities</Text>
-            {details.abilities.map(({ ability, is_hidden }) => (
-              <Text key={ability.name} style={styles.body}>
-                {formatName(ability.name)}
-                {is_hidden ? " (hidden)" : ""}
-              </Text>
-            ))}
-          </View>
-
-          <View style={styles.section}>
-            <Text style={styles.sectionTitle}>Base stats</Text>
-            {details.stats.map(({ stat, base_stat }) => (
-              <View key={stat.name} style={styles.statRowContainer}>
-                <View style={styles.statRow}>
-                  <Text style={styles.muted}>{formatName(stat.name)}</Text>
-                  <Text style={styles.statValue}>{base_stat}</Text>
-                </View>
-                <View style={styles.statTrack}>
-                  <View
-                    style={[
-                      styles.statFill,
-                      { width: `${Math.min(base_stat / 255, 1) * 100}%` },
-                    ]}
-                  />
-                </View>
-              </View>
-            ))}
-          </View>
-        </ScrollView>
-      )}
+      {renderBody()}
     </>
   );
 };
-
-const styles = StyleSheet.create({
-  centered: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 12,
-    padding: 24,
-    backgroundColor: "white",
-  },
-  muted: { color: "gray", fontSize: 16 },
-  title: { fontSize: 20, fontWeight: "700", textAlign: "center" },
-  retry: {
-    marginTop: 4,
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 999,
-    backgroundColor: "#208AEF",
-  },
-  retryLabel: { color: "white", fontSize: 16, fontWeight: "600" },
-  content: { gap: 20, padding: 16, backgroundColor: "white" },
-  hero: {
-    alignItems: "center",
-    gap: 4,
-    borderRadius: 24,
-    paddingVertical: 16,
-    paddingHorizontal: 16,
-  },
-  artwork: { width: 200, height: 200 },
-  name: { fontSize: 28, fontWeight: "700" },
-  id: { fontSize: 16, fontWeight: "600", color: "gray" },
-  types: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    justifyContent: "center",
-    gap: 8,
-    marginTop: 8,
-  },
-  typeChip: {
-    borderRadius: 999,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-  },
-  typeLabel: { fontSize: 15, fontWeight: "600", color: "#065F46" },
-  factRow: { flexDirection: "row", gap: 12 },
-  fact: {
-    flex: 1,
-    alignItems: "center",
-    gap: 4,
-    borderRadius: 16,
-    paddingVertical: 12,
-    backgroundColor: "#F3F4F6",
-  },
-  factLabel: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: "gray",
-    textTransform: "uppercase",
-  },
-  factValue: { fontSize: 18, fontWeight: "700" },
-  section: { gap: 8 },
-  sectionTitle: { fontSize: 20, fontWeight: "700" },
-  body: { fontSize: 16 },
-  statRowContainer: { gap: 4 },
-  statRow: { flexDirection: "row", justifyContent: "space-between" },
-  statValue: {
-    fontSize: 16,
-    fontWeight: "600",
-    fontVariant: ["tabular-nums"],
-  },
-  statTrack: {
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: "#E5E7EB",
-    overflow: "hidden",
-  },
-  statFill: { height: 6, borderRadius: 3, backgroundColor: "#208AEF" },
-});
 
 export default Details;
